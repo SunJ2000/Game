@@ -1,0 +1,15 @@
+import { describe, expect, it } from 'vitest'
+import { adjacent, collapseBoard, createMatchBoard, findHint, findMatches, swapTiles, powerTargets, reshuffleBoard } from './match3'
+describe('match three rules', () => {
+  it('creates stable boards with at least one legal swap', () => { let seed = 17; const rng = () => { seed = seed * 16807 % 2147483647; return seed / 2147483647 }; for (let i = 0; i < 40; i++) { const board = createMatchBoard(rng); expect(board).toHaveLength(49); expect(findMatches(board).size).toBe(0); const hint = findHint(board)!; expect(hint).toBeDefined(); expect(adjacent(...hint)).toBe(true); expect(findMatches(swapTiles(board, ...hint)).size).toBeGreaterThanOrEqual(3) } })
+  it('counts overlapping horizontal and vertical matches only once', () => { const board = Array.from({ length: 49 }, (_, i) => (i % 7 + Math.floor(i / 7) * 2) % 6); for (const i of [16, 23, 30, 22, 24]) board[i] = 5; const result = findMatches(board); expect([16, 23, 30, 22, 24].every(i => result.has(i))).toBe(true); expect(result.size).toBe(5) })
+  it('does not treat opposite row edges as adjacent', () => { expect(adjacent(6, 7)).toBe(false); expect(adjacent(6, 13)).toBe(true); expect(adjacent(6, 5)).toBe(true); expect(adjacent(6, 12)).toBe(false) })
+  it('drops surviving tiles in order and refills only cleared spaces', () => { const board = Array.from({ length: 49 }, (_, i) => i % 6); const clear = new Set([7, 21, 28]); const next = collapseBoard(board, clear, () => .5); const column = next.filter((_, i) => i % 7 === 0); expect(column).toEqual([3, 3, 3, board[0], board[14], board[35], board[42]]); for (let i = 0; i < 49; i++) if (i % 7 !== 0) expect(next[i]).toBe(board[i]) })
+  it('provides a playable fallback for a constant random source', () => { const board = createMatchBoard(() => 0); expect(findMatches(board).size).toBe(0); expect(findHint(board)).toBeDefined() })
+})
+describe('match three power-ups', () => {
+  it('a hammer clears only the selected animal', () => { expect([...powerTargets(createMatchBoard(), 24, 'hammer')]).toEqual([24]) })
+  it('a rocket clears a complete row and column without double-counting the center', () => { const targets = powerTargets(createMatchBoard(), 24, 'rocket'); expect(targets.size).toBe(13); expect([...targets].every(i => Math.floor(i / 7) === 3 || i % 7 === 3)).toBe(true); expect([...powerTargets(createMatchBoard(), 0, 'rocket')].sort((a,b) => a-b)).toEqual([0,1,2,3,4,5,6,7,14,21,28,35,42]) })
+  it('rainbow clears all and only the selected kind', () => { const board = createMatchBoard(); const targets = powerTargets(board, 24, 'rainbow'); expect([...targets]).toEqual(board.flatMap((value, i) => value === board[24] ? [i] : [])) })
+  it('reshuffling preserves animals while providing a stable playable board', () => { let seed = 51; const rng = () => { seed = seed * 16807 % 2147483647; return seed / 2147483647 }; const board = createMatchBoard(rng), shuffled = reshuffleBoard(board, rng); expect([...shuffled].sort()).toEqual([...board].sort()); expect(findMatches(shuffled).size).toBe(0); expect(findHint(shuffled)).toBeDefined(); expect(shuffled).not.toEqual(board) })
+})
