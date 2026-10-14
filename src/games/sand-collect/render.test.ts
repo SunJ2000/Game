@@ -8,16 +8,33 @@ function scene() {
   Object.assign(ctx, { fillRect, createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }) })
   const canvas = { getContext: () => ctx } as unknown as HTMLCanvasElement
   vi.stubGlobal('document', { createElement: () => canvas })
+  vi.stubGlobal('Path2D', class { constructor(readonly path: string) {} })
   const game = new SandCollector({ name: 'flow', hint: '', width: 160, height: 160, sand: new Uint8Array(25600).fill(1), columns: [[{ color: 1, capacity: 2400 }]] })
   game.start(); game.send(0)
   const renderer = new SandRenderer(canvas, game)
   const bucket = game.buckets[0]!
   game.events.push({ type: 'collect', color: 1, x: 32, y: 159, amount: 1, bucketId: bucket.id })
-  return { game, bucket, renderer, fillRect }
+  return { game, bucket, renderer, fillRect, ctx }
 }
 afterEach(() => vi.unstubAllGlobals())
 
 describe('sand stream alignment', () => {
+  it('repaints a stationary grid after changing themes without resetting progress', () => {
+    const { game, renderer, ctx } = scene()
+    renderer.draw(1000, false)
+    const grid = game.grid.slice(), buckets = game.buckets.map(bucket => ({ ...bucket })), revision = game.revision
+    const pixels = ctx.putImageData.mock.calls[0]![0] as ImageData
+    const before = [...pixels.data.slice(0, 3)]
+    renderer.setTheme('vivid')
+    renderer.draw(1000, false)
+    expect(ctx.putImageData).toHaveBeenCalledTimes(2)
+    expect([...pixels.data.slice(0, 3)]).not.toEqual(before)
+    expect(game.grid).toEqual(grid)
+    expect(game.buckets).toEqual(buckets)
+    expect(game.revision).toBe(revision)
+    renderer.draw(1000, false)
+    expect(ctx.putImageData).toHaveBeenCalledTimes(2) // Reuse pixels until sand moves again.
+  })
   it('lands on the moving bucket mouth instead of its old position, also for a large bucket', () => {
     const { bucket, renderer, fillRect } = scene()
     bucket.progress = .2

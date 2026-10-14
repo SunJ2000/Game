@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { RotateCcw, Pause, Play, Flag, Trophy, Sparkles, ChevronRight, Star, ArrowLeft, Maximize, Minimize, Smartphone } from 'lucide-vue-next'
 import BirdSprite from '../components/BirdSprite.vue'
+import ThemePicker from '../components/ThemePicker.vue'
+import { themePickerOpen } from '../theme'
 import { BIRD_WORLD, BirdsWorld, birdLevels, clampPull, trajectory } from './birdsPhysics'
 import type { Vec } from './birdsPhysics'
 import { recordScore } from '../store'
@@ -23,6 +25,7 @@ let resizeObserver: ResizeObserver | undefined
 function syncOrientation() { portrait.value = portraitQuery.matches; landscape.value = landscapeQuery.matches }
 function syncFullscreen() { fullscreen.value = document.fullscreenElement === shell.value }
 function resetClock() { cancelDrag(); last = 0; accumulator = 0 }
+watch(themePickerOpen, resetClock)
 watch([portrait, immersive], () => {
   resetClock()
   document.body.classList.toggle('birds-immersive', immersive.value || portrait.value)
@@ -52,6 +55,7 @@ const stars = computed(() => view.value.left >= Math.ceil(level.value.birds / 2)
 const resultVisible = computed(() => ['won', 'lost'].includes(view.value.phase) && resultAge.value > 30)
 const status = computed(() => paused.value ? '暂停中，快乐等你回来' : dragging.value ? '瞄准好了吗？松手让小鸟飞出去！' : view.value.phase === 'flying' ? '小鸟出发！看看这一击的威力' : view.value.phase === 'won' ? '目标全部击倒，太棒啦！' : view.value.phase === 'lost' ? '差一点点！调整角度，再挑战一次' : '按住红色小鸟，向左下拉，松手发射')
 let frame = 0, last = 0, accumulator = 0, pointerId: number | undefined
+let dragMatrix: DOMMatrix | undefined, pendingPointer: Vec | undefined, grabOffset: Vec = { x: 0, y: 0 }
 function loadLevel(index: number, keepScore = false) {
   if (index < 0 || index >= birdLevels.length) return
   world.dispose(); levelIndex.value = index; world = new BirdsWorld(birdLevels[index]!); view.value = world.snapshot()
@@ -60,39 +64,56 @@ function loadLevel(index: number, keepScore = false) {
 }
 function nextLevel() { campaignScore.value += view.value.score; loadLevel(levelIndex.value + 1, true) }
 function toWorld(e: PointerEvent): Vec | undefined {
-  const matrix = stage.value?.getScreenCTM()
+  const matrix = dragMatrix
   if (!matrix) return
-  const point = new DOMPoint(e.clientX, e.clientY).matrixTransform(matrix.inverse())
-  return { x: point.x, y: point.y }
+  return { x: matrix.a * e.clientX + matrix.c * e.clientY + matrix.e, y: matrix.b * e.clientX + matrix.d * e.clientY + matrix.f }
 }
 function startDrag(e: PointerEvent) {
-  if (e.button !== 0 || !e.isPrimary || portrait.value || paused.value || view.value.phase !== 'ready') return
+  if (e.button !== 0 || !e.isPrimary || portrait.value || themePickerOpen.value || paused.value || view.value.phase !== 'ready') return
+  // Read layout once per gesture, before changing reactive state.
+  dragMatrix = stage.value?.getScreenCTM()?.inverse()
   const point = toWorld(e)
   if (!point || Math.hypot(point.x - BIRD_WORLD.anchor.x, point.y - BIRD_WORLD.anchor.y) > 64) return
+  grabOffset = { x: BIRD_WORLD.anchor.x - point.x, y: BIRD_WORLD.anchor.y - point.y }
   pointerId = e.pointerId; dragging.value = true; pull.value = { ...BIRD_WORLD.anchor }; stage.value?.setPointerCapture(e.pointerId); e.preventDefault()
 }
-function moveDrag(e: PointerEvent) { if (!dragging.value || pointerId !== e.pointerId) return; const point = toWorld(e); if (point) pull.value = clampPull(point) }
+function moveDrag(e: PointerEvent) {
+  if (!dragging.value || pointerId !== e.pointerId) return
+  const latest = e.getCoalescedEvents?.().at(-1) ?? e
+  pendingPointer = toWorld(latest)
+  e.preventDefault()
+}
+function updatePull(point: Vec) { pull.value = clampPull({ x: point.x + grabOffset.x, y: point.y + grabOffset.y }) }
 function release(e: PointerEvent) {
   if (!dragging.value || pointerId !== e.pointerId) return
   const point = toWorld(e)
-  if (point) pull.value = clampPull(point)
+  if (point) updatePull(point)
   world.launch(pull.value); view.value = world.snapshot(); cancelDrag()
 }
-function cancelDrag() { if (pointerId !== undefined && stage.value?.hasPointerCapture(pointerId)) stage.value.releasePointerCapture(pointerId); dragging.value = false; pointerId = undefined; pull.value = { ...BIRD_WORLD.anchor } }
+function cancelDrag() {
+  const captured = pointerId
+  pointerId = undefined; dragging.value = false; pendingPointer = undefined; dragMatrix = undefined
+  pull.value = { ...BIRD_WORLD.anchor }
+  if (captured !== undefined && stage.value?.hasPointerCapture(captured)) stage.value.releasePointerCapture(captured)
+}
 function togglePause() { paused.value = !paused.value; cancelDrag(); accumulator = 0; last = 0 }
 function hidden() { if (document.hidden) { paused.value = true; cancelDrag(); last = 0; accumulator = 0 } }
 function animate(time: number) {
-  if (!paused.value && !portrait.value) {
+  if (dragging.value && pendingPointer) { updatePull(pendingPointer); pendingPointer = undefined }
+  if (!paused.value && !portrait.value && !themePickerOpen.value) {
     if (last) accumulator += Math.min(time - last, 100)
     let ticks = 0
     while (accumulator >= 1000 / 60 && ticks++ < 6) { world.step(); accumulator -= 1000 / 60; if (['won', 'lost'].includes(world.phase)) resultAge.value++ }
-    const next = world.snapshot()
-    if (next.score !== view.value.score) recordScore('birds', campaignScore.value + next.score)
-    view.value = next
+    // Aiming does not move the physics world: keep its SVG subtree and snapshots asleep.
+    if (world.phase === 'flying' || view.value.phase === 'flying' || ['won', 'lost'].includes(world.phase)) {
+      const next = world.snapshot()
+      if (next.score !== view.value.score) recordScore('birds', campaignScore.value + next.score)
+      view.value = next
+    }
   }
   last = time; frame = requestAnimationFrame(animate)
 }
-function keyboardShot(e: KeyboardEvent) { if (e.code === 'Space' && view.value.phase === 'ready' && !paused.value && !portrait.value) { e.preventDefault(); world.launch({ x: BIRD_WORLD.anchor.x - 66, y: BIRD_WORLD.anchor.y + 24 }); view.value = world.snapshot() } else if (e.code === 'Escape' && dragging.value) cancelDrag() }
+function keyboardShot(e: KeyboardEvent) { if (themePickerOpen.value) return; if (e.code === 'Space' && view.value.phase === 'ready' && !paused.value && !portrait.value) { e.preventDefault(); world.launch({ x: BIRD_WORLD.anchor.x - 66, y: BIRD_WORLD.anchor.y + 24 }); view.value = world.snapshot() } else if (e.code === 'Escape' && dragging.value) cancelDrag() }
 onMounted(() => {
   frame = requestAnimationFrame(animate); document.addEventListener('visibilitychange', hidden)
   portraitQuery.addEventListener('change', syncOrientation); landscapeQuery.addEventListener('change', syncOrientation)
@@ -110,7 +131,7 @@ onUnmounted(() => {
 </script>
 <template>
   <div ref="shell" class="birds-shell" :class="{ immersive }">
-  <div class="birds-level-heading" :inert="portrait || undefined"><div><button class="birds-back" aria-label="返回游乐场" @click="leaveGame"><ArrowLeft :size="19" /></button><span class="birds-level-tag">LEVEL {{ String(levelIndex + 1).padStart(2, '0') }}</span><strong>{{ level.name }}</strong></div><div class="toolbar-actions"><button :aria-label="paused ? '继续小鸟游戏' : '暂停小鸟游戏'" @click="togglePause"><Play v-if="paused" :size="15" /><Pause v-else :size="15" /><span>{{ paused ? '继续' : '暂停' }}</span></button><button aria-label="重玩小鸟当前关卡" @click="loadLevel(levelIndex)"><RotateCcw :size="15" /><span>重玩</span></button><button :aria-label="fullscreen ? '退出全屏' : '全屏游玩'" @click="toggleFullscreen"><Minimize v-if="fullscreen" :size="15" /><Maximize v-else :size="15" /><span>{{ fullscreen ? '退出全屏' : '全屏' }}</span></button></div></div>
+  <div class="birds-level-heading" :inert="portrait || undefined"><div><button class="birds-back" aria-label="返回游乐场" @click="leaveGame"><ArrowLeft :size="19" /></button><span class="birds-level-tag">LEVEL {{ String(levelIndex + 1).padStart(2, '0') }}</span><strong>{{ level.name }}</strong></div><div class="toolbar-actions"><ThemePicker v-if="immersive" compact /><button :aria-label="paused ? '继续小鸟游戏' : '暂停小鸟游戏'" @click="togglePause"><Play v-if="paused" :size="15" /><Pause v-else :size="15" /><span>{{ paused ? '继续' : '暂停' }}</span></button><button aria-label="重玩小鸟当前关卡" @click="loadLevel(levelIndex)"><RotateCcw :size="15" /><span>重玩</span></button><button :aria-label="fullscreen ? '退出全屏' : '全屏游玩'" @click="toggleFullscreen"><Minimize v-if="fullscreen" :size="15" /><Maximize v-else :size="15" /><span>{{ fullscreen ? '退出全屏' : '全屏' }}</span></button></div></div>
   <div class="birds-scorebar" :inert="portrait || undefined"><span><Trophy :size="14" />得分 <strong>{{ campaignScore + view.score }}</strong></span><span><BirdSprite kind="bird" />小鸟 <strong>{{ view.left }}</strong></span><span><Flag :size="14" />目标 <strong>{{ view.pigs }}</strong></span></div>
   <div ref="scene" class="birds-scene-wrap" :inert="portrait || undefined">
     <svg ref="stage" class="birds-scene" :viewBox="sceneBox" role="application" tabindex="0" aria-label="小鸟弹弓游戏：按住左侧红色小鸟，向左下方拖动并松手发射；空格可发射推荐角度" @pointerdown="startDrag" @pointermove="moveDrag" @pointerup="release" @pointercancel="cancelDrag" @lostpointercapture="cancelDrag" @keydown="keyboardShot">
@@ -125,11 +146,11 @@ onUnmounted(() => {
       <path v-if="view.phase === 'ready'" :d="`M80 336L${pull.x} ${pull.y}L117 336`" stroke="#796555" stroke-width="5" fill="none"/>
       <g v-if="dragging" fill="#fffdf1"><circle v-for="(point, i) in points" :key="i" :cx="point.x" :cy="point.y" :r="3.2 - i * .1" :opacity="1 - i * .035"/></g>
       <g fill="#fffef0"><circle v-for="(point, i) in view.trail" :key="i" :cx="point.x" :cy="point.y" r="2" :opacity=".18 + i / view.trail.length * .5"/></g>
-      <g v-for="body in view.bodies" :key="body.id" :transform="`translate(${body.x} ${body.y}) rotate(${body.angle})`">
+      <g v-for="body in view.bodies" :key="body.id" v-memo="[body]" :transform="`translate(${body.x} ${body.y}) rotate(${body.angle})`">
         <template v-if="body.kind === 'block'"><rect :x="-body.width / 2" :y="-body.height / 2" :width="body.width" :height="body.height" rx="2" :fill="body.material === 'stone' ? '#a6b6b4' : '#d5ae7d'" :stroke="body.material === 'stone' ? '#889c9a' : '#b88e5e'" stroke-width="1.5"/><path v-if="body.material === 'wood'" :d="body.width > body.height ? `M${-body.width / 2 + 6} 0h${body.width - 12}` : `M0 ${-body.height / 2 + 6}v${body.height - 12}`" stroke="#b48c62" stroke-width="1" opacity=".7"/><path v-if="body.hp < 3" d="m-3-4 4 3-4 4 5 4" stroke="#98794f" stroke-width="1.5" fill="none"/></template>
         <BirdSprite v-else :kind="body.kind" :x="-body.radius * 1.12" :y="-body.radius * 1.12" :width="body.radius * 2.24" :height="body.radius * 2.24" />
       </g>
-      <g v-if="view.phase === 'ready'"><circle v-if="!dragging" :cx="pull.x" :cy="pull.y" r="36" fill="none" stroke="#fffcef" stroke-width="2" stroke-dasharray="4 5" opacity=".7"/><BirdSprite kind="bird" :x="pull.x - 23" :y="pull.y - 23" width="46" height="46"/><path :d="`M117 336L${pull.x + 8} ${pull.y + 3}`" stroke="#796555" stroke-width="3"/><g v-if="!dragging"><rect x="55" y="278" width="83" height="23" rx="11" fill="#fffcee" opacity=".95"/><text x="96" y="294" font-size="12" fill="#9a9970" text-anchor="middle">拉我，飞出去</text></g></g>
+      <g v-if="view.phase === 'ready'"><circle v-if="!dragging" :cx="pull.x" :cy="pull.y" r="36" fill="none" stroke="#fffcef" stroke-width="2" stroke-dasharray="4 5" opacity=".7"/><g :transform="`translate(${pull.x} ${pull.y})`"><BirdSprite kind="bird" x="-21.28" y="-21.28" width="42.56" height="42.56" /></g><path :d="`M117 336L${pull.x + 8} ${pull.y + 3}`" stroke="#796555" stroke-width="3"/><g v-if="!dragging"><rect x="55" y="278" width="83" height="23" rx="11" fill="#fffcee" opacity=".95"/><text x="96" y="294" font-size="12" fill="#9a9970" text-anchor="middle">拉我，飞出去</text></g></g>
       <g v-for="n in Math.max(0, view.left - (view.phase === 'ready' ? 1 : 0))" :key="n"><BirdSprite kind="bird" :x="16 + (n - 1) * 28" y="444" width="25" height="25" /></g>
       <g v-for="burst in view.bursts" :key="burst.id" :transform="`translate(${burst.x} ${burst.y - (48 - burst.life) * .65})`" :opacity="Math.min(1, burst.life / 20)"><circle r="25" fill="#ffedb7" opacity=".55"/><text font-size="17" fill="#b38d46" text-anchor="middle" font-weight="700">{{ burst.text }}</text><path d="m-29-10-7-5m63 5 7-5m-30-18v-8" stroke="#edcf7d" stroke-width="3" stroke-linecap="round"/></g>
       <text x="579" y="483" text-anchor="end" fill="#8f9d7b" font-size="9" letter-spacing="2">PULL. AIM. FLY.</text>

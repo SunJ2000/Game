@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Gamepad2, Search, ArrowUpRight, ArrowRight, Heart, Home, Clock3, Sparkles, Zap, Brain, Grid2X2, ChevronRight, X, Check, Shuffle, Leaf, Github, Coffee } from 'lucide-vue-next'
+import { Gamepad2, Search, ArrowUpRight, ArrowRight, Heart, Home, Clock3, Sparkles, Zap, Brain, Grid2X2, ChevronRight, X, Check, Shuffle, Github, Coffee } from 'lucide-vue-next'
 import GameArt from './components/GameArt.vue'
 import GameRoom from './components/GameRoom.vue'
+import ThemePicker from './components/ThemePicker.vue'
 import { categories, games } from './data'
 import type { Game, GameId } from './data'
 import { saved, toggleFavorite, recordPlay } from './store'
@@ -35,13 +36,12 @@ function navigate(target: string) {
 function play(id: GameId) { location.hash = `/play/${id}` }
 function surprise() { play(games[Math.floor(Math.random() * games.length)]!.id) }
 function favorite(id: GameId) { toggleFavorite(id); toast.value = saved.favorites.includes(id) ? '已加入收藏，下次快乐更方便' : '已取消收藏'; clearTimeout(toastTimeout); toastTimeout = setTimeout(() => toast.value = '', 2400) }
-function browse() { if (activeGame.value || page.value !== 'home') navigate('home'); setTimeout(() => document.querySelector('#games')?.scrollIntoView({ behavior: 'smooth' }), 50) }
 onMounted(() => { syncRoute(); window.addEventListener('hashchange', syncRoute) })
 onUnmounted(() => { window.removeEventListener('hashchange', syncRoute); clearTimeout(toastTimeout) })
 </script>
 
 <template>
-  <header class="site-header">
+  <header class="site-header" :class="{ 'library-header': !activeGame }">
     <div class="header-inner">
       <a class="brand" href="#/home" aria-label="口袋游乐场首页"><span class="brand-symbol"><Gamepad2 :size="25" :stroke-width="2.2" /></span><span>口袋游乐场<small>POCKET PLAY</small></span></a>
       <nav class="desktop-nav" aria-label="主导航">
@@ -49,34 +49,17 @@ onUnmounted(() => { window.removeEventListener('hashchange', syncRoute); clearTi
         <button :class="{ selected: page === 'favorites' && !activeGame }" @click="navigate('favorites')">我的收藏 <span v-if="saved.favorites.length" class="count">{{ saved.favorites.length }}</span></button>
         <button :class="{ selected: page === 'recent' && !activeGame }" @click="navigate('recent')">最近玩过</button>
       </nav>
-      <div class="header-right"><span class="online-dot"></span><span>快乐随时在线</span><button class="shuffle-button" @click="surprise"><Shuffle :size="15" /> 随便玩玩</button></div>
+      <div class="header-right"><ThemePicker /><button class="shuffle-button" @click="surprise"><Shuffle :size="15" /> 随便玩玩</button></div>
     </div>
   </header>
 
-  <main v-if="!activeGame" class="main-container">
-    <template v-if="page === 'home' && !search">
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="eyebrow"><span></span> 给生活，按一下暂停键</div>
-          <h1>快乐，<br class="mobile-break" />随手就来<span class="title-spark">✳</span></h1>
-          <p>不用下载，不用登录。<br class="mobile-break" />把碎片时间，变成一点小快乐。</p>
-          <button class="primary-button" @click="browse">开启快乐 <ArrowUpRight :size="19" /></button>
-          <div class="hero-note"><span class="tiny-avatars"><span>☺</span><span>✿</span><span>☻</span></span><span>小小的游戏，大大的好心情</span></div>
-        </div>
-        <div class="hero-visual"><span class="floating-label label-top"><Sparkles :size="14" /> 快乐加载中…</span><GameArt id="2048" hero /><span class="floating-label label-bottom"><span>✌</span> JUST PLAY. HAVE FUN.</span></div>
-        <span class="hero-corner">HAPPINESS IS A CLICK AWAY ↗</span>
-      </section>
-
-      <section class="perks" aria-label="游玩特点">
-        <div><span class="perk-icon"><Zap :size="19" /></span><span><strong>点开即玩</strong><small>零下载，快乐不等待</small></span></div>
-        <div><span class="perk-icon"><Leaf :size="19" /></span><span><strong>轻松无负担</strong><small>无需登录，纯粹好玩</small></span></div>
-        <div><span class="perk-icon"><Gamepad2 :size="19" /></span><span><strong>手机也好玩</strong><small>为你的指尖量身打造</small></span></div>
-        <div><span class="perk-icon"><Heart :size="19" /></span><span><strong>收藏小快乐</strong><small>喜欢的游戏，随时回来</small></span></div>
-      </section>
-    </template>
-
+  <main v-if="!activeGame" class="main-container library-page">
     <section id="games" class="games-section">
-      <div class="section-heading"><div><div class="section-eyebrow">{{ page === 'home' ? 'A LITTLE PLAY, A BETTER DAY' : 'YOUR LITTLE HAPPY PLACE' }}</div><h2>{{ heading }}<span class="heading-dot">.</span></h2><p v-if="page !== 'home'">{{ page === 'favorites' ? '把喜欢的留在口袋里，快乐随时再来。' : '熟悉的小快乐，再来一局吧。' }}</p></div><label class="search-box"><Search :size="18" /><input v-model="search" aria-label="搜索小游戏" placeholder="搜一搜，今天玩什么？" /><button v-if="search" aria-label="清空搜索" @click="search = ''"><X :size="15" /></button><span v-else class="search-key">⌕</span></label></div>
+      <div class="section-heading" :class="{ 'library-home-heading': page === 'home' }">
+        <h1 v-if="page === 'home'" class="library-title">小游戏</h1>
+        <div v-else><h2>{{ heading }}<span class="heading-dot">.</span></h2><p>{{ page === 'favorites' ? '把喜欢的留在口袋里，快乐随时再来。' : '熟悉的小快乐，再来一局吧。' }}</p></div>
+        <label class="search-box"><Search :size="18" /><input v-model="search" aria-label="搜索小游戏" placeholder="搜一搜，今天玩什么？" /><button v-if="search" aria-label="清空搜索" @click="search = ''"><X :size="15" /></button><span v-else class="search-key">⌕</span></label>
+      </div>
       <div class="filter-row"><div class="category-tabs" aria-label="游戏分类"><button v-for="(item, index) in categories" :key="item" :class="{ active: category === item }" @click="category = item"><component :is="[Grid2X2, Brain, Coffee, Gamepad2, Zap][index]" :size="16" />{{ item }}</button></div><span class="game-count">{{ shownGames.length }} 个小快乐，等你发现</span></div>
       <div v-if="shownGames.length" class="game-grid">
         <article v-for="(game, index) in shownGames" :key="game.id" class="game-card" :style="{ '--card-delay': `${index * 45}ms` }">

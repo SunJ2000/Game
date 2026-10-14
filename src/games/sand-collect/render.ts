@@ -1,5 +1,8 @@
-import { bucketPose, PALETTE, SandCollector } from './engine'
+import { bucketPose, SandCollector } from './engine'
 import type { Bucket } from './engine'
+import { BUCKET_ART } from './bucket-art'
+import type { ThemeId } from '../../theme'
+import { sandPaint } from './colors'
 
 interface Particle { x: number; y: number; bucketId: number; color: number; age: number }
 export class SandRenderer {
@@ -11,13 +14,23 @@ export class SandRenderer {
   private particles: Particle[] = []
   private last = 0
   private pulses = new Map<number, number>()
+  private bucketBody = new Path2D(BUCKET_ART.body)
+  private bucketHighlight = new Path2D(BUCKET_ART.highlight)
+  private bucketHandle = new Path2D(BUCKET_ART.handle)
+  private paint = sandPaint('soft')
 
-  constructor(canvas: HTMLCanvasElement, readonly engine: SandCollector) {
+  constructor(canvas: HTMLCanvasElement, readonly engine: SandCollector, theme: ThemeId = 'soft') {
+    this.setTheme(theme)
     this.context = canvas.getContext('2d')!
     this.sandCanvas.width = engine.level.width; this.sandCanvas.height = engine.level.height
     this.sandContext = this.sandCanvas.getContext('2d')!
     this.pixels = this.sandContext.createImageData(engine.level.width, engine.level.height)
     canvas.width = 720; canvas.height = 800 // Capped backing size; never scales with devicePixelRatio.
+  }
+
+  setTheme(theme: ThemeId) {
+    this.paint = sandPaint(theme)
+    this.revision = -1 // Recolour even when the paused sand grid has not moved.
   }
 
   private bucketPosition(bucket: Pick<Bucket, 'progress' | 'capacity'>) {
@@ -30,7 +43,7 @@ export class SandRenderer {
     if (this.revision === this.engine.revision) return
     const data = this.pixels.data, grid = this.engine.grid
     for (let i = 0; i < grid.length; i++) {
-      const color = grid[i]!, rgb = PALETTE[color]!.rgb, offset = i * 4
+      const color = grid[i]!, rgb = this.paint.palette[color]!.rgb, offset = i * 4
       const shade = ((Math.imul(i ^ (i >>> 8), 0x45d9f3b) >>> 27) % 7 - 3) * 2
       data[offset] = rgb[0] + shade; data[offset + 1] = rgb[1] + shade; data[offset + 2] = rgb[2] + shade
       data[offset + 3] = color ? 255 : 0
@@ -46,17 +59,17 @@ export class SandRenderer {
     const ctx = this.context
     ctx.setTransform(2, 0, 0, 2, 0, 0)
     ctx.clearRect(0, 0, 360, 400)
-    ctx.fillStyle = '#e9f1e5'; ctx.fillRect(0, 0, 360, 400)
-    ctx.fillStyle = '#d9e6d4'; ctx.beginPath(); ctx.roundRect(14, 4, 332, 287, 18); ctx.fill()
-    ctx.fillStyle = '#fffdf1'; ctx.beginPath(); ctx.roundRect(20, 10, 320, 275, 12); ctx.fill()
+    ctx.fillStyle = this.paint.scene; ctx.fillRect(0, 0, 360, 400)
+    ctx.fillStyle = this.paint.frame; ctx.beginPath(); ctx.roundRect(14, 4, 332, 287, 18); ctx.fill()
+    ctx.fillStyle = this.paint.paper; ctx.beginPath(); ctx.roundRect(20, 10, 320, 275, 12); ctx.fill()
     ctx.save(); ctx.beginPath(); ctx.roundRect(20, 10, 320, 275, 12); ctx.clip()
     ctx.imageSmoothingEnabled = false; ctx.drawImage(this.sandCanvas, 20, 10, 320, 275)
     ctx.restore()
     // Single straight belt, with buckets clipped at its entry and exit.
-    ctx.fillStyle = '#b3c6ad'; ctx.beginPath(); ctx.roundRect(14, 332, 332, 43, 9); ctx.fill()
-    ctx.fillStyle = '#c7d7bd'; ctx.beginPath(); ctx.roundRect(17, 335, 326, 37, 7); ctx.fill()
+    ctx.fillStyle = this.paint.beltEdge; ctx.beginPath(); ctx.roundRect(14, 332, 332, 43, 9); ctx.fill()
+    ctx.fillStyle = this.paint.belt; ctx.beginPath(); ctx.roundRect(17, 335, 326, 37, 7); ctx.fill()
     ctx.save(); ctx.beginPath(); ctx.roundRect(17, 335, 326, 37, 7); ctx.clip()
-    ctx.strokeStyle = '#afc3a6'; ctx.lineWidth = 2
+    ctx.strokeStyle = this.paint.beltLine; ctx.lineWidth = 2
     const shift = this.engine.ticks % 16
     for (let x = -20; x < 390; x += 16) {
       ctx.beginPath(); ctx.moveTo(x + shift, 335); ctx.lineTo(x + shift - 12, 372); ctx.stroke()
@@ -94,27 +107,33 @@ export class SandRenderer {
       const target = this.bucketPosition(bucket)
       particle.age += dt
       const progress = Math.max(0, Math.min(1, particle.age / .35)), eased = progress * progress
-      ctx.fillStyle = PALETTE[particle.color]!.hex
+      ctx.fillStyle = this.paint.palette[particle.color]!.hex
       ctx.fillRect(particle.x + (target.x - particle.x) * eased - 1.5, particle.y + (target.mouthY - particle.y) * eased - 1.5, 3, 3)
     }
     this.particles = this.particles.filter(particle => particle.age < .35)
   }
 
   private drawBucket(color: number, remaining: number, capacity: number, pulse: number) {
-    const ctx = this.context, paint = PALETTE[color]!
+    const ctx = this.context, paint = this.paint.palette[color]!
     if (pulse > 0) {
       ctx.strokeStyle = '#f6d77c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, -8, 27 + (1 - pulse / .6) * 8, 0, Math.PI * 2); ctx.stroke()
     }
-    ctx.fillStyle = '#3f634528'; ctx.beginPath(); ctx.ellipse(0, 16, 23, 5, 0, 0, Math.PI * 2); ctx.fill()
-    ctx.fillStyle = paint.hex; ctx.strokeStyle = '#fffdf1'; ctx.lineWidth = 2
-    ctx.beginPath(); ctx.moveTo(-21, -19); ctx.lineTo(-15, 12); ctx.quadraticCurveTo(0, 24, 15, 12); ctx.lineTo(21, -19); ctx.closePath(); ctx.fill(); ctx.stroke()
-    ctx.beginPath(); ctx.ellipse(0, -19, 21, 8, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
-    ctx.fillStyle = '#29493d33'; ctx.beginPath(); ctx.ellipse(0, -19, 17, 5, 0, 0, Math.PI * 2); ctx.fill()
+    // Same 80×82 artwork as the queue. Keep the mouth anchored at (0, -19).
+    ctx.save(); ctx.translate(0, -19); ctx.scale(.84, .84); ctx.translate(-40, -25)
+    ctx.fillStyle = '#4967471a'; ctx.beginPath(); ctx.ellipse(40, 76, 26, 5, 0, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = paint.hex; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2
+    ctx.fill(this.bucketBody); ctx.stroke(this.bucketBody)
+    ctx.fillStyle = '#ffffff2e'; ctx.fill(this.bucketHighlight)
+    ctx.strokeStyle = '#46695080'; ctx.lineWidth = 3; ctx.stroke(this.bucketHandle)
+    ctx.fillStyle = paint.hex; ctx.strokeStyle = '#ffffff'
+    ctx.beginPath(); ctx.ellipse(40, 25, 25, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+    ctx.fillStyle = '#243b3838'; ctx.beginPath(); ctx.ellipse(40, 25, 21, 7, 0, 0, Math.PI * 2); ctx.fill()
     if (remaining < capacity) {
-      ctx.fillStyle = paint.hex; ctx.beginPath(); ctx.ellipse(0, -17, 8 + 9 * (1 - remaining / capacity), 4, 0, 0, Math.PI * 2); ctx.fill()
+      ctx.fillStyle = paint.hex; ctx.beginPath(); ctx.ellipse(40, 27, 10 + 10 * (1 - remaining / capacity), 5, 0, 0, Math.PI * 2); ctx.fill()
     }
-    ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.fillText(paint.symbol, 0, -2)
-    ctx.fillStyle = '#2c443c'; ctx.beginPath(); ctx.roundRect(-22, 2, 44, 17, 8); ctx.fill()
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif'; ctx.fillText(String(remaining), 0, 14)
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffffffe6'; ctx.font = 'bold 15px sans-serif'; ctx.fillText(paint.symbol, 40, 51)
+    ctx.fillStyle = '#273f39e0'; ctx.beginPath(); ctx.roundRect(17, 55, 46, 21, 10); ctx.fill()
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Outfit, sans-serif'; ctx.fillText(String(remaining), 40, 70)
+    ctx.restore()
   }
 }

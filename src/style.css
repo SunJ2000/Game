@@ -68,3 +68,16 @@
 .sand{background:#e9f1db;color:#8ca776}.sand-room .game-panel-heading{display:none}
 @media(max-width:760px) and (orientation:portrait){body.sand-playing{background:#f4f7eb}body.sand-playing .site-header,body.sand-playing .site-footer{display:none}.sand-room.main-container{padding:0;max-width:none}.sand-room .play-breadcrumb,.sand-room .play-sidebar{display:none}.sand-room .play-layout{display:block}.sand-room .game-panel{padding:0;border:0;background:none;border-radius:0;box-shadow:none}}
 .sand-screen-reader{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+
+/* Put the game covers in the first screen instead of an introductory banner. */
+.library-page .games-section{margin-top:0}
+.library-title{margin:0;font-size:25px;letter-spacing:-.8px;line-height:1.5}
+.library-home-heading{margin-bottom:16px}
+@media(max-width:760px){
+  .site-header.library-header{height:64px}
+  .library-page.main-container{padding:14px 16px 0}
+  .library-home-heading{gap:0;margin-bottom:10px}
+  .library-home-heading .library-title{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+  .library-page .filter-row{margin-bottom:14px}
+  .library-page .search-box{height:44px}
+}

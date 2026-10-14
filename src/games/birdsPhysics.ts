@@ -1,6 +1,7 @@
 import Matter from 'matter-js'
 const { Engine, Bodies, Body, Composite, Events, Sleeping } = Matter
 export const BIRD_WORLD = { width: 600, height: 500, ground: 436, anchor: { x: 98, y: 336 }, maxPull: 72, gravity: .75 }
+const STEP_MS = 1000 / 60, GRAVITY_SCALE = .0036, BIRD_AIR = .002
 export interface Vec { x: number; y: number }
 export interface BlockSpec { x: number; y: number; width: number; height: number; material?: 'wood' | 'stone' }
 export interface BirdLevel { name: string; birds: number; pigs: Vec[]; blocks: BlockSpec[] }
@@ -19,7 +20,19 @@ export function clampPull(point: Vec): Vec {
   return { x: BIRD_WORLD.anchor.x + dx, y: BIRD_WORLD.anchor.y + dy }
 }
 export function launchVelocity(pull: Vec): Vec { const point = clampPull(pull); return { x: (BIRD_WORLD.anchor.x - point.x) * .205, y: (BIRD_WORLD.anchor.y - point.y) * .205 } }
-export function trajectory(pull: Vec): Vec[] { const v = launchVelocity(pull); return Array.from({ length: 18 }, (_, i) => { const t = (i + 1) * 1.5; return { x: BIRD_WORLD.anchor.x + v.x * t, y: BIRD_WORLD.anchor.y + v.y * t + BIRD_WORLD.gravity / 2 * t * t } }).filter(p => p.y < BIRD_WORLD.ground && p.x < BIRD_WORLD.width) }
+export function trajectory(pull: Vec): Vec[] {
+  const point = clampPull(pull), velocity = launchVelocity(point), points: Vec[] = []
+  // Match Matter's fixed-step integration, including air drag and gravity before movement.
+  const acceleration = BIRD_WORLD.gravity * GRAVITY_SCALE * STEP_MS * STEP_MS
+  for (let tick = 1; tick <= 48; tick++) {
+    velocity.x *= 1 - BIRD_AIR
+    velocity.y = velocity.y * (1 - BIRD_AIR) + acceleration
+    point.x += velocity.x; point.y += velocity.y
+    if (point.y >= BIRD_WORLD.ground - 19 || point.x >= BIRD_WORLD.width) break
+    if (tick % 2 === 0) points.push({ ...point })
+  }
+  return points
+}
 interface Entity { body: Matter.Body; kind: 'bird' | 'pig' | 'block'; width: number; height: number; radius: number; material: 'wood' | 'stone'; hp: number }
 export interface BirdBodyView { id: number; x: number; y: number; angle: number; kind: Entity['kind']; width: number; height: number; radius: number; material: Entity['material']; hp: number }
 export interface Burst { id: number; x: number; y: number; text: string; life: number }
@@ -42,7 +55,7 @@ export class BirdsWorld {
     this.left = level.birds
     this.engine.gravity.y = BIRD_WORLD.gravity
     // Matter uses milliseconds squared; make gravity match the 60 Hz preview.
-    this.engine.gravity.scale = .0036
+    this.engine.gravity.scale = GRAVITY_SCALE
     const ground = Bodies.rectangle(300, 466, 1600, 60, { isStatic: true, friction: .85, label: 'ground' })
     Composite.add(this.engine.world, ground)
     for (const block of level.blocks) {
@@ -52,7 +65,7 @@ export class BirdsWorld {
     }
     for (const pig of level.pigs) this.add({ body: Bodies.circle(pig.x, pig.y, 18, { density: .0015, friction: .8, restitution: .04, frictionAir: .015 }), kind: 'pig', width: 36, height: 36, radius: 18, material: 'wood', hp: 1 })
     // Settle the initial structures before enabling collision damage.
-    for (let i = 0; i < 120; i++) Engine.update(this.engine, 1000 / 60)
+    for (let i = 0; i < 120; i++) Engine.update(this.engine, STEP_MS)
     Events.on(this.engine, 'collisionStart', event => {
       if (!this.fired || this.phase === 'won' || this.phase === 'lost') return
       for (const pair of event.pairs) {
@@ -73,7 +86,7 @@ export class BirdsWorld {
     const pull = clampPull(point)
     if (Math.hypot(pull.x - BIRD_WORLD.anchor.x, pull.y - BIRD_WORLD.anchor.y) < 8) return false
     if (this.bird) { Composite.remove(this.engine.world, this.bird); this.entities.delete(this.bird.id) }
-    this.bird = Bodies.circle(BIRD_WORLD.anchor.x, BIRD_WORLD.anchor.y, 19, { density: .008, friction: .65, frictionAir: .002, restitution: .35 })
+    this.bird = Bodies.circle(pull.x, pull.y, 19, { density: .008, friction: .65, frictionAir: BIRD_AIR, restitution: .35 })
     this.add({ body: this.bird, kind: 'bird', width: 38, height: 38, radius: 19, material: 'wood', hp: 1 })
     Body.setVelocity(this.bird, launchVelocity(pull))
     this.left--; this.fired = true; this.ticks = 0; this.quiet = 0; this.trail = []; this.phase = 'flying'
@@ -81,7 +94,7 @@ export class BirdsWorld {
   }
   step() {
     if (this.phase !== 'flying') { this.bursts = this.bursts.filter(b => --b.life > 0); return }
-    Engine.update(this.engine, 1000 / 60); this.ticks++
+    Engine.update(this.engine, STEP_MS); this.ticks++
     if (this.bird && this.ticks % 3 === 0 && this.bird.position.y < BIRD_WORLD.ground) { this.trail.push({ ...this.bird.position }); if (this.trail.length > 36) this.trail.shift() }
     for (const [id, entity] of this.entities) if (entity.body.position.y > BIRD_WORLD.height + 50 || entity.body.position.x > BIRD_WORLD.width + 80 || entity.body.position.x < -100) this.removed.add(id)
     let structureChanged = false
